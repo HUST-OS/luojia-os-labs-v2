@@ -30,7 +30,7 @@ fn main() {
         (version: crate_version!())
         (author: crate_authors!())
         (about: crate_description!())
-        (@subcommand build =>
+        (@subcommand make =>
             (about: "Build project")
             (@arg release: --release "Build artifacts in release mode, with optimizations")
         )
@@ -55,31 +55,33 @@ fn main() {
         compile_mode: CompileMode::Debug,
     };
     println!("xtask: package {}, mode: {:?}", xtask_env.kernel_package_name, xtask_env.compile_mode);
-    if let Some(matches) = matches.subcommand_matches("build") {
+    if let Some(matches) = matches.subcommand_matches("make") {
         if matches.is_present("release") {
             xtask_env.compile_mode = CompileMode::Release;
         }
-        xtask_build(&xtask_env);
-        xtask_binary(&xtask_env);
+        xtask_build_kernel(&xtask_env);
+        xtask_binary_kernel(&xtask_env);
+        xtask_build_apps(&xtask_env);
     } else if let Some(matches) = matches.subcommand_matches("qemu") {
         if matches.is_present("release") {
             xtask_env.compile_mode = CompileMode::Release;
         }
-        xtask_build(&xtask_env);
-        xtask_binary(&xtask_env);
+        xtask_build_kernel(&xtask_env);
+        xtask_binary_kernel(&xtask_env);
+        xtask_build_apps(&xtask_env);
         xtask_qemu(&xtask_env);
     } else if let Some(_matches) = matches.subcommand_matches("asm") {
-        xtask_build(&xtask_env);
-        xtask_asm(&xtask_env);
+        xtask_build_kernel(&xtask_env);
+        xtask_asm_kernel(&xtask_env);
     } else if let Some(_matches) = matches.subcommand_matches("size") {
-        xtask_build(&xtask_env);
-        xtask_size(&xtask_env);
+        xtask_build_kernel(&xtask_env);
+        xtask_size_kernel(&xtask_env);
     } else {
         println!("Use `cargo qemu` to run, `cargo xtask --help` for help")
     }
 }
 
-fn xtask_build(xtask_env: &XtaskEnv) {
+fn xtask_build_kernel(xtask_env: &XtaskEnv) {
     let cargo = env::var("CARGO").unwrap_or_else(|_| "cargo".to_string());
     let mut command = Command::new(cargo);
     command.current_dir(&xtask_env.kernel_package_path);
@@ -98,7 +100,26 @@ fn xtask_build(xtask_env: &XtaskEnv) {
     }
 }
 
-fn xtask_asm(xtask_env: &XtaskEnv) {
+fn xtask_build_apps(xtask_env: &XtaskEnv) { // todo: 不止一个应用
+    let cargo = env::var("CARGO").unwrap_or_else(|_| "cargo".to_string());
+    let mut command = Command::new(cargo);
+    command.current_dir(project_root().join("apps").join("hello-world"));
+    command.arg("build");
+    match xtask_env.compile_mode {
+        CompileMode::Debug => {},
+        CompileMode::Release => { command.arg("--release"); },
+    }
+    command.args(&["--package", "hello-world"]);
+    command.args(&["--target", DEFAULT_TARGET]);
+    let status = command
+        .status().unwrap();
+    if !status.success() {
+        println!("cargo build failed");
+        process::exit(1);
+    }
+}
+
+fn xtask_asm_kernel(xtask_env: &XtaskEnv) {
     // @{{objdump}} -D {{test-kernel-elf}} | less
     let objdump = "riscv64-unknown-elf-objdump";
     Command::new(objdump)
@@ -108,7 +129,7 @@ fn xtask_asm(xtask_env: &XtaskEnv) {
         .status().unwrap();
 }
 
-fn xtask_size(xtask_env: &XtaskEnv) {
+fn xtask_size_kernel(xtask_env: &XtaskEnv) {
     // @{{size}} -A -x {{test-kernel-elf}} 
     let size = "rust-size";
     Command::new(size)
@@ -119,7 +140,7 @@ fn xtask_size(xtask_env: &XtaskEnv) {
         .status().unwrap();
 }
 
-fn xtask_binary(xtask_env: &XtaskEnv) {
+fn xtask_binary_kernel(xtask_env: &XtaskEnv) {
     /*
     objdump := "riscv64-unknown-elf-objdump"
 objcopy := "rust-objcopy --binary-architecture=riscv64"

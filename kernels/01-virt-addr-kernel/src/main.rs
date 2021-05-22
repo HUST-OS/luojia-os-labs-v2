@@ -11,14 +11,14 @@ extern crate alloc;
 #[macro_use]
 mod console;
 mod sbi;
+mod executor;
+mod mm;
 
 use core::panic::PanicInfo;
-use core::alloc::Layout;
-use buddy_system_allocator::LockedHeap;
 
 pub extern "C" fn rust_main(hartid: usize, dtb_pa: usize) -> ! {
     println!("[kernel] Hart id = {}, DTB physical address = {:#x}", hartid, dtb_pa);
-    heap_init();
+    mm::heap_init();
     sbi::shutdown()
 }
 
@@ -36,34 +36,6 @@ fn panic(info: &PanicInfo) -> ! {
         println!("Panicked: {}", info.message().unwrap());
     }
     sbi::shutdown()
-}
-
-#[cfg_attr(not(test), alloc_error_handler)]
-#[allow(unused)]
-fn alloc_error_handler(layout: Layout) -> ! {
-    println!("Alloc error for layout {:?}", layout);
-    sbi::shutdown()
-}
-
-const KERNEL_HEAP_SIZE: usize = 64 * 1024;
-
-static mut HEAP_SPACE: [u8; KERNEL_HEAP_SIZE] = [0; KERNEL_HEAP_SIZE];
-
-#[global_allocator]
-static HEAP: LockedHeap<32> = LockedHeap::empty();
-
-pub(crate) fn heap_init() {
-    unsafe {
-        HEAP.lock().init(
-            HEAP_SPACE.as_ptr() as usize, KERNEL_HEAP_SIZE
-        )
-    }
-    use alloc::vec::Vec;
-    let mut vec = Vec::new();
-    for i in 0..5 {
-        vec.push(i);
-    }
-    println!("[kernel] Alloc test: {:?}", vec);
 }
 
 const BOOT_STACK_SIZE: usize = 4096 * 4 * 8;
