@@ -104,7 +104,7 @@ fn xtask_asm(xtask_env: &XtaskEnv) {
     Command::new(objdump)
         .current_dir(dist_dir(xtask_env))
         .arg("-d")
-        .arg(&xtask_env.kernel_package_path)
+        .arg(&xtask_env.kernel_package_name)
         .status().unwrap();
 }
 
@@ -115,7 +115,7 @@ fn xtask_size(xtask_env: &XtaskEnv) {
         .current_dir(dist_dir(xtask_env))
         .arg("-A")
         .arg("-x")
-        .arg(&xtask_env.kernel_package_path)
+        .arg(&xtask_env.kernel_package_name)
         .status().unwrap();
 }
 
