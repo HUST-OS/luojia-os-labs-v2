@@ -1,0 +1,11 @@
+[workspace]
+members = [
+    "apps/*",
+    "library/*",
+    "kernels/*",
+    "xtask",
+]
+default-members = ["xtask"]
+
+[workspace.metadata.xtask]
+default-kernel-path = "01-virt-addr-kernel"
