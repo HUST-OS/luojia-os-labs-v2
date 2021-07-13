@@ -8,7 +8,7 @@ use core::{
     pin::Pin,
     ops::{Generator, GeneratorState},
 };
-// use crate::mm;
+use crate::mm;
 
 pub fn init() {
     let mut addr = 0 as usize; // todo
@@ -22,12 +22,24 @@ pub fn init() {
 pub struct Runtime {
     context: ResumeContext, 
     user_satp: Satp,
+    trampoline_resume: fn(*mut ResumeContext, Satp),
     // current_user_stack: Vec<mm::FrameBox>,
 }
 
 impl Runtime {
-    pub fn new_user(new_sepc: usize, new_satp: Satp) -> Self {
-        let mut ans: Runtime = unsafe { core::mem::MaybeUninit::zeroed().assume_init() };
+    pub fn new_user(new_sepc: usize, new_satp: Satp, trampoline_va_start: mm::VirtAddr) -> Self {
+        let mut ans: Runtime = Runtime {
+            context: unsafe { core::mem::MaybeUninit::zeroed().assume_init() },
+            user_satp: unsafe { core::mem::MaybeUninit::zeroed().assume_init() },
+            trampoline_resume: {
+                extern "C" { fn strampoline(); }
+                let trampoline_pa_start = strampoline as usize;
+                let resume_fn_pa = trampoline_resume as usize;
+                let resume_fn_va = resume_fn_pa - trampoline_pa_start + trampoline_va_start.0;
+                // println!("pa start = {:x?}, pa = {:x?}, va = {:x?}",trampoline_pa_start, resume_fn_pa, resume_fn_va);
+                unsafe { core::mem::transmute(resume_fn_va) }
+            }
+        };
         ans.prepare_next_app(new_sepc, new_satp);
         ans
     }
@@ -55,10 +67,10 @@ impl Generator for Runtime {
     type Yield = KernelTrap;
     type Return = ();
     fn resume(mut self: Pin<&mut Self>, _arg: ()) -> GeneratorState<Self::Yield, Self::Return> {
-        unsafe { jump_to_trampoline_resume(
+        (self.trampoline_resume)(
             &mut self.context as *mut _,
-            self.user_satp.bits()
-        ) };
+            self.user_satp
+        );
         let stval = stval::read();
         let trap = match scause::read().cause() {
             Trap::Exception(Exception::UserEnvCall) => KernelTrap::Syscall(),
@@ -118,12 +130,6 @@ pub struct ResumeContext {
     pub sepc: usize, // 32
     pub kernel_stack: usize, // 33
     pub kernel_satp: Satp, // 34
-}
-
-unsafe fn jump_to_trampoline_resume(ctx: *mut ResumeContext, user_satp: usize) {
-    let resume_fn = trampoline_resume as usize;
-    crate::sbi::shutdown(); // todo
-    asm!("jr {resume}", resume = in(reg) resume_fn, options(noreturn))
 }
 
 /*

@@ -34,6 +34,7 @@ pub extern "C" fn rust_main(hartid: usize, dtb_pa: usize) -> ! {
         mm::Sv39Flags::R | mm::Sv39Flags::W | mm::Sv39Flags::X
     ).expect("allocate one mapped space");
     let (vpn, ppn, n) = get_trampoline_paging_config::<mm::Sv39>();
+    let trampoline_va_start = vpn.addr_begin::<mm::Sv39>();
     kernel_addr_space.allocate_map(
         vpn, ppn, n,
         mm::Sv39Flags::R | mm::Sv39Flags::W | mm::Sv39Flags::X | mm::Sv39Flags::U
@@ -52,7 +53,11 @@ pub extern "C" fn rust_main(hartid: usize, dtb_pa: usize) -> ! {
         mm::activate_paged_riscv_sv39(kernel_addr_space.root_page_number(), kernel_asid)
     };
     // println!("kernel satp = {:x?}", kernel_satp);
-    let mut rt = executor::Runtime::new_user(0x80400000, kernel_satp); // todo: use user satp
+    let mut rt = executor::Runtime::new_user(
+        0x80400000, 
+        kernel_satp,// todo: use user satp
+        trampoline_va_start
+    ); 
     use core::pin::Pin;
     use core::ops::Generator;
     loop {

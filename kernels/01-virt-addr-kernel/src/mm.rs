@@ -78,11 +78,11 @@ impl PhysPageNum {
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
 pub struct VirtPageNum(usize);
 
-// impl VirtPageNum {
-//     pub fn addr_begin(&self) -> VirtAddr {
-//         VirtAddr(self.0 << FRAME_SIZE_BITS)
-//     }
-// }
+impl VirtPageNum {
+    pub fn addr_begin<M: PageMode>(&self) -> VirtAddr {
+        VirtAddr(self.0 << M::FRAME_SIZE_BITS)
+    }
+}
 
 use alloc::vec::Vec;
 
