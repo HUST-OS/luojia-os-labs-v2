@@ -15,6 +15,13 @@ SECTIONS
 
     . = ALIGN(4K);
     etext = .;
+    strampoline = .;
+    .trampoline : {
+        *(.trampoline)
+    }
+
+    . = ALIGN(4K);
+    etrampoline = .;
     srodata = .;
     .rodata : {
         *(.rodata .rodata.*)

@@ -690,8 +690,11 @@ pub(crate) fn test_map_solve() {
 }
 
 // 切换地址空间，同时需要提供1.地址空间的详细设置 2.地址空间编号
-pub unsafe fn activate_paged_riscv_sv39(root_ppn: PhysPageNum, asid: AddressSpaceId) {
+// 同时返回：satp寄存器的值
+use riscv::register::satp::Satp;
+pub unsafe fn activate_paged_riscv_sv39(root_ppn: PhysPageNum, asid: AddressSpaceId) -> Satp {
     use riscv::register::satp::{self, Mode};
     satp::set(Mode::Sv39, asid.0 as usize, root_ppn.0);
-    asm!("sfence.vma {}", in(reg) asid.0 as usize);
+    asm!("sfence.vma x0, {}", in(reg) asid.0 as usize);
+    satp::read()
 }
