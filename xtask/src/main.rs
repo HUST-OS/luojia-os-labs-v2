@@ -43,6 +43,7 @@ fn main() {
         (@subcommand qemu =>
             (about: "Run QEMU")
             (@arg release: --release "Build artifacts in release mode, with optimizations")
+            (@arg app: "Choose the apps to be bundled")
         )
     ).get_matches();
     let kernel_package_path = project_root().join("kernels").join(&default_kernel_path());
@@ -61,15 +62,22 @@ fn main() {
         }
         xtask_build_kernel(&xtask_env);
         xtask_binary_kernel(&xtask_env);
-        xtask_build_apps(&xtask_env);
+        // xtask_build_apps(&xtask_env); // todo: multiple apps
     } else if let Some(matches) = matches.subcommand_matches("qemu") {
         if matches.is_present("release") {
             xtask_env.compile_mode = CompileMode::Release;
         }
+        let chosen_app = "hello-world"; // todo: 目前是写死的
+        if let Some(app_matches) = matches.values_of("app") {
+            for app_name in app_matches {
+                println!("xtask: building app {}", app_name);
+                xtask_build_app(&xtask_env, app_name);
+                xtask_binary_app(&xtask_env, app_name);
+            }
+        }
         xtask_build_kernel(&xtask_env);
         xtask_binary_kernel(&xtask_env);
-        xtask_build_apps(&xtask_env);
-        xtask_qemu(&xtask_env);
+        xtask_qemu(&xtask_env, chosen_app);
     } else if let Some(_matches) = matches.subcommand_matches("asm") {
         xtask_build_kernel(&xtask_env);
         xtask_asm_kernel(&xtask_env);
@@ -100,21 +108,37 @@ fn xtask_build_kernel(xtask_env: &XtaskEnv) {
     }
 }
 
-fn xtask_build_apps(xtask_env: &XtaskEnv) { // todo: 不止一个应用
+fn xtask_build_app(xtask_env: &XtaskEnv, app_name: &str) {
     let cargo = env::var("CARGO").unwrap_or_else(|_| "cargo".to_string());
     let mut command = Command::new(cargo);
-    command.current_dir(project_root().join("apps").join("hello-world"));
+    command.current_dir(project_root().join("apps").join(app_name));
     command.arg("build");
     match xtask_env.compile_mode {
         CompileMode::Debug => {},
         CompileMode::Release => { command.arg("--release"); },
     }
-    command.args(&["--package", "hello-world"]);
+    command.args(&["--package", app_name]);
     command.args(&["--target", DEFAULT_TARGET]);
     let status = command
         .status().unwrap();
     if !status.success() {
         println!("cargo build failed");
+        process::exit(1);
+    }
+}
+
+fn xtask_binary_app(xtask_env: &XtaskEnv, app_name: &str) {
+    let objcopy = "rust-objcopy";
+    let status = Command::new(objcopy)
+        .current_dir(dist_dir(xtask_env))
+        .arg(app_name)
+        .arg("--binary-architecture=riscv64")
+        .arg("--strip-all")
+        .args(&["-O", "binary", &format!("{}.bin", app_name)])
+        .status().unwrap();
+
+    if !status.success() {
+        println!("objcopy binary failed");
         process::exit(1);
     }
 }
@@ -163,7 +187,7 @@ build: firmware
     }
 }
 
-fn xtask_qemu(xtask_env: &XtaskEnv) {
+fn xtask_qemu(xtask_env: &XtaskEnv, one_app: &str) {
     /*
     qemu: build
     @qemu-system-riscv64 \
@@ -177,10 +201,10 @@ fn xtask_qemu(xtask_env: &XtaskEnv) {
     let status = Command::new("qemu-system-riscv64")
         .current_dir(dist_dir(xtask_env))
         .args(&["-machine", "virt"])
-        .args(&["-bios", "none"])
+        .args(&["-bios", "../../../bootloader/rustsbi-qemu.bin"])
         .arg("-nographic")
-        .args(&["-device", "loader,file=../../../bootloader/rustsbi-qemu.bin,addr=0x80000000"])
-        .args(&["-device", &format!("loader,file={},addr=0x80200000", xtask_env.kernel_binary_name)])
+        .args(&["-kernel", &xtask_env.kernel_binary_name])
+        .args(&["-device", &format!("loader,file={}.bin,addr=0x80400000", one_app)])
         .status().unwrap();
     
     if !status.success() {

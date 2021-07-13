@@ -66,7 +66,7 @@ pub extern "C" fn rust_main(hartid: usize, dtb_pa: usize) -> ! {
         }
     }
     // sbi::shutdown()
-}       
+}
 
 fn get_trampoline_paging_config<M: mm::PageMode>() -> (mm::VirtPageNum, mm::PhysPageNum, usize) {
     let (trampoline_pa_start, trampoline_pa_end) = {
