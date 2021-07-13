@@ -38,6 +38,12 @@ pub extern "C" fn rust_main(hartid: usize, dtb_pa: usize) -> ! {
         vpn, ppn, n,
         mm::Sv39Flags::R | mm::Sv39Flags::W | mm::Sv39Flags::X | mm::Sv39Flags::U
     ).expect("allocate trampoline code mapped space");
+    kernel_addr_space.allocate_map(
+        mm::VirtAddr(0x80400000).page_number::<mm::Sv39>(), 
+        mm::PhysAddr(0x80400000).page_number::<mm::Sv39>(), 
+        32,
+        mm::Sv39Flags::R | mm::Sv39Flags::W | mm::Sv39Flags::X | mm::Sv39Flags::U
+    ).expect("allocate user mapped space");
     mm::test_asid_alloc();
     let max_asid = mm::max_asid();
     let mut asid_alloc = mm::StackAsidAllocator::new(max_asid);
@@ -45,14 +51,7 @@ pub extern "C" fn rust_main(hartid: usize, dtb_pa: usize) -> ! {
     let kernel_satp = unsafe {
         mm::activate_paged_riscv_sv39(kernel_addr_space.root_page_number(), kernel_asid)
     };
-    println!("kernel satp = {:?}", kernel_satp);
-    // todo: 有一个小bug
-    kernel_addr_space.allocate_map(
-        mm::VirtAddr(0x80400000).page_number::<mm::Sv39>(), 
-        mm::PhysAddr(0x80400000).page_number::<mm::Sv39>(), 
-        32,
-        mm::Sv39Flags::R | mm::Sv39Flags::W | mm::Sv39Flags::X | mm::Sv39Flags::U
-    ).expect("allocate user mapped space");
+    // println!("kernel satp = {:x?}", kernel_satp);
     let mut rt = executor::Runtime::new_user(0x80400000, kernel_satp); // todo: use user satp
     use core::pin::Pin;
     use core::ops::Generator;
@@ -62,7 +61,7 @@ pub extern "C" fn rust_main(hartid: usize, dtb_pa: usize) -> ! {
         }
     }
     // sbi::shutdown()
-}
+}       
 
 fn get_trampoline_paging_config<M: mm::PageMode>() -> (mm::VirtPageNum, mm::PhysPageNum, usize) {
     let (trampoline_pa_start, trampoline_pa_end) = {
@@ -75,9 +74,9 @@ fn get_trampoline_paging_config<M: mm::PageMode>() -> (mm::VirtPageNum, mm::Phys
     let vpn = mm::VirtAddr(trampoline_va_start).page_number::<M>();
     let ppn = mm::PhysAddr(trampoline_pa_start).page_number::<M>();
     let n = trampoline_len >> M::FRAME_SIZE_BITS;
-    println!("va = {:x?}, pa = {:x?} {:x?}", trampoline_va_start, trampoline_pa_start, trampoline_pa_end);
-    println!("l = {:x?}", trampoline_len);
-    println!("vpn = {:x?}, ppn = {:x?}, n = {}", vpn, ppn, n);
+    // println!("va = {:x?}, pa = {:x?} {:x?}", trampoline_va_start, trampoline_pa_start, trampoline_pa_end);
+    // println!("l = {:x?}", trampoline_len);
+    // println!("vpn = {:x?}, ppn = {:x?}, n = {}", vpn, ppn, n);
     (vpn, ppn, n)
 }
 

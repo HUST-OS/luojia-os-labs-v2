@@ -610,7 +610,7 @@ impl<M: PageMode, A: FrameAllocator + Clone> PagedAddrSpace<M, A> {
             let idx_range = M::vpn_index_range(vpn_range.clone(), page_level);
             // println!("[kernel-alloc-map-test] IDX RANGE: {:?}", idx_range);
             for vidx in idx_range {
-                let this_ppn = PhysPageNum(ppn.0 - vpn.0 + M::vpn_level_index(vpn_range.start, page_level, vidx).0);
+                let this_ppn = PhysPageNum(ppn.0 + M::vpn_level_index(vpn_range.start, page_level, vidx).0 - vpn.0);
                 // println!("[kernel-alloc-map-test] Table: {:p} Vidx {} -> Ppn {:x?}", table, vidx, this_ppn);
                 match M::slot_try_get_entry(&mut table[vidx]) {
                     Ok(_entry) => panic!("already allocated"),

@@ -122,6 +122,7 @@ pub struct ResumeContext {
 
 unsafe fn jump_to_trampoline_resume(ctx: *mut ResumeContext, user_satp: usize) {
     let resume_fn = trampoline_resume as usize;
+    crate::sbi::shutdown(); // todo
     asm!("jr {resume}", resume = in(reg) resume_fn, options(noreturn))
 }
 
