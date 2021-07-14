@@ -49,7 +49,7 @@ pub extern "C" fn rust_main(hartid: usize, dtb_pa: usize) -> ! {
         mm::VirtAddr(0x80400000).page_number::<mm::Sv39>(), 
         mm::PhysAddr(0x80400000).page_number::<mm::Sv39>(), 
         32,
-        mm::Sv39Flags::R | mm::Sv39Flags::W | mm::Sv39Flags::X
+        mm::Sv39Flags::R | mm::Sv39Flags::W | mm::Sv39Flags::X | mm::Sv39Flags::U
     ).expect("allocate user mapped space");
     mm::test_asid_alloc();
     let max_asid = mm::max_asid();
