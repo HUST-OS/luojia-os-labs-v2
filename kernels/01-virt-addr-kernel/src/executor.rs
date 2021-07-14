@@ -10,8 +10,12 @@ use core::{
 };
 use crate::mm;
 
-pub fn init() {
-    let mut addr = trampoline_trap_entry as usize; // todo
+pub fn init(trampoline_va_start: mm::VirtAddr) {
+    extern "C" { fn strampoline(); }
+    let trampoline_pa_start = strampoline as usize;
+    let trap_entry_fn_pa = trampoline_trap_entry as usize;
+    let trap_entry_fn_va = trap_entry_fn_pa - trampoline_pa_start + trampoline_va_start.0;
+    let mut addr = trap_entry_fn_va;
     if addr & 0x2 != 0 {
         addr += 0x2; // 必须对齐到4个字节
     }
@@ -224,6 +228,7 @@ unsafe extern "C" fn trampoline_resume(_ctx: *mut ResumeContext, _user_satp: usi
 #[link_section = ".trampoline"]
 unsafe extern "C" fn trampoline_trap_entry() {
     asm!(
+        ".p2align 2", // 对齐到4字节
         // sp = 用户栈, sscratch = 生成器上下文
         "csrrw  sp, sscratch, sp", 
         // sp = 生成器上下文, sscratch = 用户栈

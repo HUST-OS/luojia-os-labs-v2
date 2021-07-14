@@ -72,7 +72,7 @@ pub extern "C" fn rust_main(hartid: usize, dtb_pa: usize) -> ! {
         mm::activate_paged_riscv_sv39(kernel_addr_space.root_page_number(), kernel_asid)
     };
     // println!("kernel satp = {:x?}", kernel_satp);
-    executor::init();
+    executor::init(trampoline_va_start);
     let (mut user_space, _user_stack, user_stack_addr) = 
         create_sv39_app_address_space(&frame_alloc);
     for (idx, frame_box) in frames.iter() {
@@ -84,8 +84,8 @@ pub extern "C" fn rust_main(hartid: usize, dtb_pa: usize) -> ! {
         ).expect("allocate trampoline data mapped space");
     }
     let user_asid = asid_alloc.allocate_asid().expect("alloc user asid");
-    println!("User space = {:x?}", user_space);
-    println!("Ppn = {:x?}", user_space.root_page_number());
+    // println!("User space = {:x?}", user_space);
+    // println!("Ppn = {:x?}", user_space.root_page_number());
     let mut rt = executor::Runtime::new_user(
         0x80400000, 
         user_stack_addr,
