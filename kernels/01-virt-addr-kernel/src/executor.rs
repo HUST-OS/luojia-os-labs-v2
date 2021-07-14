@@ -23,14 +23,15 @@ pub struct Runtime {
     context: ResumeContext, 
     user_satp: Satp,
     trampoline_resume: fn(*mut ResumeContext, Satp),
-    // current_user_stack: Vec<mm::FrameBox>,
+    current_user_stack: mm::VirtAddr,
 }
 
 impl Runtime {
-    pub fn new_user(new_sepc: usize, new_satp: Satp, trampoline_va_start: mm::VirtAddr) -> Self {
+    pub fn new_user(new_sepc: usize, user_stack_addr: mm::VirtAddr, new_satp: Satp, trampoline_va_start: mm::VirtAddr) -> Self {
         let mut ans: Runtime = Runtime {
             context: unsafe { core::mem::MaybeUninit::zeroed().assume_init() },
             user_satp: unsafe { core::mem::MaybeUninit::zeroed().assume_init() },
+            current_user_stack: user_stack_addr,
             trampoline_resume: {
                 extern "C" { fn strampoline(); }
                 let trampoline_pa_start = strampoline as usize;
@@ -45,7 +46,7 @@ impl Runtime {
     }
 
     fn reset(&mut self) {
-        // self.context.sp = self.user_stack;
+        self.context.sp = self.current_user_stack.0;
         unsafe { sstatus::set_spp(SPP::User) };
         self.context.sstatus = sstatus::read();
         self.context.kernel_stack = 0x233333666666; // 将会被resume函数覆盖

@@ -319,8 +319,9 @@ impl<A: FrameAllocator> FrameBox<A> {
     // unsafe fn from_ppn(ppn: PhysPageNum, frame_alloc: A) -> Self {
     //     Self { ppn, frame_alloc }
     // }
-
-    fn phys_page_num(&self) -> PhysPageNum {
+    
+    // 得到本页帧内存的页号
+    pub fn phys_page_num(&self) -> PhysPageNum {
         self.ppn
     }
 }
@@ -636,7 +637,7 @@ impl<M: PageMode> MapPairs<M> {
         let mut ans = Vec::new();
         for &i in M::visit_levels_until(PageLevel::leaf_level()) {
             let align = M::get_layout_for_level(i).frame_align();
-            if (vpn.0 - ppn.0) % align != 0 || n < align {
+            if usize::wrapping_sub(vpn.0, ppn.0) % align != 0 || n < align {
                 continue;
             }
             let (mut ve_prev, mut vs_prev) = (None, None);
@@ -697,4 +698,10 @@ pub unsafe fn activate_paged_riscv_sv39(root_ppn: PhysPageNum, asid: AddressSpac
     satp::set(Mode::Sv39, asid.0 as usize, root_ppn.0);
     asm!("sfence.vma x0, {}", in(reg) asid.0 as usize);
     satp::read()
+}
+
+// 得到satp的值
+pub fn get_satp_sv39(asid: AddressSpaceId, ppn: PhysPageNum) -> Satp {
+    let bits = (8 << 60) | ((asid.0 as usize) << 44) | ppn.0;
+    unsafe { core::mem::transmute(bits) }
 }

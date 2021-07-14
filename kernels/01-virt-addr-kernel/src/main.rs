@@ -15,6 +15,7 @@ mod executor;
 mod mm;
 
 use core::panic::PanicInfo;
+use alloc::vec::Vec;
 
 pub extern "C" fn rust_main(hartid: usize, dtb_pa: usize) -> ! {
     println!("[kernel] Hart id = {}, DTB physical address = {:#x}", hartid, dtb_pa);
@@ -45,24 +46,22 @@ pub extern "C" fn rust_main(hartid: usize, dtb_pa: usize) -> ! {
         vpn, ppn, n,
         mm::Sv39Flags::R | mm::Sv39Flags::W | mm::Sv39Flags::X
     ).expect("allocate trampoline code mapped space");
-    kernel_addr_space.allocate_map(
-        mm::VirtAddr(0x80400000).page_number::<mm::Sv39>(), 
-        mm::PhysAddr(0x80400000).page_number::<mm::Sv39>(), 
-        32,
-        mm::Sv39Flags::R | mm::Sv39Flags::W | mm::Sv39Flags::X | mm::Sv39Flags::U
-    ).expect("allocate user mapped space");
     mm::test_asid_alloc();
     let max_asid = mm::max_asid();
     let mut asid_alloc = mm::StackAsidAllocator::new(max_asid);
     let kernel_asid = asid_alloc.allocate_asid().expect("alloc kernel asid");
-    let kernel_satp = unsafe {
+    let _kernel_satp = unsafe {
         mm::activate_paged_riscv_sv39(kernel_addr_space.root_page_number(), kernel_asid)
     };
     // println!("kernel satp = {:x?}", kernel_satp);
     executor::init();
+    let (user_space, _user_stack, user_stack_addr) = 
+        create_sv39_app_address_space(&frame_alloc);
+    let user_asid = asid_alloc.allocate_asid().expect("alloc user asid");
     let mut rt = executor::Runtime::new_user(
         0x80400000, 
-        kernel_satp,// todo: use user satp
+        user_stack_addr,
+        mm::get_satp_sv39(user_asid, user_space.root_page_number()),
         trampoline_va_start
     ); 
     use core::pin::Pin;
@@ -91,6 +90,38 @@ fn get_trampoline_paging_config<M: mm::PageMode>() -> (mm::VirtPageNum, mm::Phys
     // println!("vpn = {:x?}, ppn = {:x?}, n = {}", vpn, ppn, n);
     (vpn, ppn, n)
 }
+
+fn create_sv39_app_address_space<A: mm::FrameAllocator + Clone>(frame_alloc: A) -> (mm::PagedAddrSpace<mm::Sv39, A>, Vec<mm::FrameBox<A>>, mm::VirtAddr) {
+    let mut addr_space = mm::PagedAddrSpace::try_new_in(mm::Sv39, frame_alloc.clone())
+        .expect("allocate page to create kernel paged address space");
+    let (vpn, ppn, n) = get_trampoline_paging_config::<mm::Sv39>();
+    addr_space.allocate_map(
+        vpn, ppn, n,
+        mm::Sv39Flags::R | mm::Sv39Flags::W | mm::Sv39Flags::X | mm::Sv39Flags::U
+    ).expect("allocate trampoline code mapped space");
+    addr_space.allocate_map(
+        mm::VirtAddr(0x80400000).page_number::<mm::Sv39>(), 
+        mm::PhysAddr(0x80400000).page_number::<mm::Sv39>(), 
+        32,
+        mm::Sv39Flags::R | mm::Sv39Flags::W | mm::Sv39Flags::X | mm::Sv39Flags::U
+    ).expect("allocate user mapped space");
+    let user_stack = {
+        let mut ans = Vec::new();
+        for i in 0..5 {
+            let frame_box = mm::FrameBox::try_new_in(frame_alloc.clone()).expect("allocate user stack frame");
+            addr_space.allocate_map(
+                mm::VirtAddr(0x60000000 + i * 0x1000).page_number::<mm::Sv39>(), 
+                frame_box.phys_page_num(), 
+                1,
+                mm::Sv39Flags::R | mm::Sv39Flags::W | mm::Sv39Flags::X | mm::Sv39Flags::U
+            ).expect("allocate user mapped space");
+            ans.push(frame_box)
+        }
+        ans
+    };
+    (addr_space, user_stack, mm::VirtAddr(0x60000000))
+}
+
 
 #[cfg_attr(not(test), panic_handler)]
 #[allow(unused)]
