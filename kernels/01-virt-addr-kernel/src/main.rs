@@ -13,9 +13,11 @@ mod console;
 mod sbi;
 mod executor;
 mod mm;
+mod syscall;
 
 use core::panic::PanicInfo;
 use alloc::vec::Vec;
+use syscall::{syscall, SyscallOperation};
 
 pub extern "C" fn rust_main(hartid: usize, dtb_pa: usize) -> ! {
     println!("[kernel] Hart id = {}, DTB physical address = {:#x}", hartid, dtb_pa);
@@ -94,13 +96,41 @@ pub extern "C" fn rust_main(hartid: usize, dtb_pa: usize) -> ! {
         trampoline_data_addr,
     ); 
     use core::pin::Pin;
-    use core::ops::Generator;
+    use core::ops::{Generator, GeneratorState};
     loop {
         match Pin::new(&mut rt).resume(()) {
-            s => println!("state: {:?}", s),
+            GeneratorState::Yielded(executor::KernelTrap::Syscall()) => {
+                println!("Kernel trap syscall!");
+                let ctx = unsafe { rt.context_mut() };
+                match syscall(ctx.a7, ctx.a6, [ctx.a0, ctx.a1, ctx.a2, ctx.a3, ctx.a4, ctx.a5]) {
+                    SyscallOperation::Return(ans) => {
+                        ctx.a0 = ans.code;
+                        ctx.a1 = ans.extra;
+                        ctx.sepc = ctx.sepc.wrapping_add(4);
+                    }
+                    SyscallOperation::Terminate(code) => {
+                        println!("[Kernel] Process returned with code {}", code);
+                        sbi::shutdown()
+                    }
+                    SyscallOperation::UserPanic(file, line, col, msg) => {
+                        let file = file.unwrap_or("<no file>");
+                        let msg = msg.unwrap_or("<no message>");
+                        println!("[Kernel] User process panicked at '{}', {}:{}:{}", msg, file, line, col);
+                        sbi::shutdown()
+                    }
+                }
+            },
+            GeneratorState::Yielded(executor::KernelTrap::IllegalInstruction(val)) => {
+                println!("[Kernel] Illegal instruction {:016x}, kernel dumpped.", val);
+                sbi::shutdown()
+            },
+            GeneratorState::Yielded(trap) => {
+                println!("[Kernel] Trap {:?}, kernel dumpped.", trap);
+                sbi::shutdown()
+            } 
+            GeneratorState::Complete(()) => sbi::shutdown()
         }
     }
-    // sbi::shutdown()
 }
 
 fn get_trampoline_text_paging_config<M: mm::PageMode>() -> (mm::VirtPageNum, mm::PhysPageNum, usize) {
