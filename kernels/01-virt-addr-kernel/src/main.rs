@@ -61,8 +61,9 @@ pub extern "C" fn rust_main(hartid: usize, dtb_pa: usize) -> ! {
             1,
             mm::Sv39Flags::R | mm::Sv39Flags::W
         ).expect("allocate trampoline data mapped space");
-        frames.push(frame_box)
+        frames.push((i, frame_box))
     }
+    let trampoline_data_addr = mm::VirtAddr(usize::MAX - n * 0x1000 - data_frame_count * 0x1000 + 1);
     mm::test_asid_alloc();
     let max_asid = mm::max_asid();
     let mut asid_alloc = mm::StackAsidAllocator::new(max_asid);
@@ -72,8 +73,16 @@ pub extern "C" fn rust_main(hartid: usize, dtb_pa: usize) -> ! {
     };
     // println!("kernel satp = {:x?}", kernel_satp);
     executor::init();
-    let (user_space, _user_stack, user_stack_addr, user_trampoline_data_addr) = 
+    let (mut user_space, _user_stack, user_stack_addr) = 
         create_sv39_app_address_space(&frame_alloc);
+    for (idx, frame_box) in frames.iter() {
+        user_space.allocate_map(
+            mm::VirtAddr(usize::MAX - n * 0x1000 - data_frame_count * 0x1000 + idx * 0x1000 + 1).page_number::<mm::Sv39>(), 
+            frame_box.phys_page_num(), 
+            1,
+            mm::Sv39Flags::R | mm::Sv39Flags::W
+        ).expect("allocate trampoline data mapped space");
+    }
     let user_asid = asid_alloc.allocate_asid().expect("alloc user asid");
     println!("User space = {:x?}", user_space);
     println!("Ppn = {:x?}", user_space.root_page_number());
@@ -82,7 +91,7 @@ pub extern "C" fn rust_main(hartid: usize, dtb_pa: usize) -> ! {
         user_stack_addr,
         mm::get_satp_sv39(user_asid, user_space.root_page_number()),
         trampoline_va_start,
-        user_trampoline_data_addr,
+        trampoline_data_addr,
     ); 
     use core::pin::Pin;
     use core::ops::Generator;
@@ -111,7 +120,7 @@ fn get_trampoline_text_paging_config<M: mm::PageMode>() -> (mm::VirtPageNum, mm:
     (vpn, ppn, n)
 }
 
-fn create_sv39_app_address_space<A: mm::FrameAllocator + Clone>(frame_alloc: A) -> (mm::PagedAddrSpace<mm::Sv39, A>, Vec<mm::FrameBox<A>>, mm::VirtAddr, mm::VirtAddr) {
+fn create_sv39_app_address_space<A: mm::FrameAllocator + Clone>(frame_alloc: A) -> (mm::PagedAddrSpace<mm::Sv39, A>, Vec<mm::FrameBox<A>>, mm::VirtAddr) {
     let mut addr_space = mm::PagedAddrSpace::try_new_in(mm::Sv39, frame_alloc.clone())
         .expect("allocate page to create kernel paged address space");
     let (vpn, ppn, n) = get_trampoline_text_paging_config::<mm::Sv39>();
@@ -139,23 +148,8 @@ fn create_sv39_app_address_space<A: mm::FrameAllocator + Clone>(frame_alloc: A) 
         ).expect("allocate user stack mapped space");
         frames.push(frame_box)
     }
-    // 跳板数据页
-    let data_len = core::mem::size_of::<executor::ResumeContext>();
-    let frame_size = 1_usize << <mm::Sv39 as mm::PageMode>::FRAME_SIZE_BITS;
-    assert!(data_len > 0, "resume context should take place in memory");
-    let data_frame_count = (data_len - 1) / frame_size + 1; // roundup(data_len / frame_size)
-    for i in 0..data_frame_count {
-        let frame_box = mm::FrameBox::try_new_in(frame_alloc.clone()).expect("allocate user stack frame");
-        addr_space.allocate_map(
-            // 去掉代码页的数量n
-            mm::VirtAddr(usize::MAX - n * 0x1000 - data_frame_count * 0x1000 + i * 0x1000 + 1).page_number::<mm::Sv39>(), 
-            frame_box.phys_page_num(), 
-            1,
-            mm::Sv39Flags::R | mm::Sv39Flags::W
-        ).expect("allocate trampoline data mapped space");
-        frames.push(frame_box)
-    }
-    /* 调试用 */
+    // 跳板数据页在外面处理，这里不处理
+    /* 页表信息，调试用 */
     addr_space.allocate_map(
         mm::VirtAddr(0x80420000).page_number::<mm::Sv39>(), 
         mm::PhysAddr(0x80420000).page_number::<mm::Sv39>(), 
@@ -163,8 +157,7 @@ fn create_sv39_app_address_space<A: mm::FrameAllocator + Clone>(frame_alloc: A) 
         mm::Sv39Flags::R | mm::Sv39Flags::W | mm::Sv39Flags::X | mm::Sv39Flags::U
     ).expect("allocate remaining space");
     let stack_addr = mm::VirtAddr(0x60000000);
-    let trampoline_data_addr = mm::VirtAddr(usize::MAX - n * 0x1000 - data_frame_count * 0x1000 + 1);
-    (addr_space, frames, stack_addr, trampoline_data_addr)
+    (addr_space, frames, stack_addr)
 }
 
 #[cfg_attr(not(test), panic_handler)]
