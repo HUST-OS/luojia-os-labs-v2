@@ -138,13 +138,14 @@ fn create_sv39_app_address_space<A: mm::FrameAllocator + Clone>(frame_alloc: A) 
     ).expect("allocate user program mapped space");
     // 用户栈
     let mut frames = Vec::new();
-    for i in 0..5 {
+    let stack_frame_n = 5;
+    for i in 0..stack_frame_n {
         let frame_box = mm::FrameBox::try_new_in(frame_alloc.clone()).expect("allocate user stack frame");
         addr_space.allocate_map(
             mm::VirtAddr(0x60000000 + i * 0x1000).page_number::<mm::Sv39>(), 
             frame_box.phys_page_num(), 
             1,
-            mm::Sv39Flags::R | mm::Sv39Flags::W | mm::Sv39Flags::X | mm::Sv39Flags::U
+            mm::Sv39Flags::R | mm::Sv39Flags::W | mm::Sv39Flags::U
         ).expect("allocate user stack mapped space");
         frames.push(frame_box)
     }
@@ -156,7 +157,7 @@ fn create_sv39_app_address_space<A: mm::FrameAllocator + Clone>(frame_alloc: A) 
         1024 - 32, 
         mm::Sv39Flags::R | mm::Sv39Flags::W | mm::Sv39Flags::X | mm::Sv39Flags::U
     ).expect("allocate remaining space");
-    let stack_addr = mm::VirtAddr(0x60000000);
+    let stack_addr = mm::VirtAddr(0x60000000 + stack_frame_n * 0x1000); // 栈底是高地址
     (addr_space, frames, stack_addr)
 }
 
