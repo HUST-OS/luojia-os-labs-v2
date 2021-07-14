@@ -181,12 +181,12 @@ fn create_sv39_app_address_space<A: mm::FrameAllocator + Clone>(frame_alloc: A) 
     }
     // 跳板数据页在外面处理，这里不处理
     /* 页表信息，调试用 */
-    addr_space.allocate_map(
-        mm::VirtAddr(0x80420000).page_number::<mm::Sv39>(), 
-        mm::PhysAddr(0x80420000).page_number::<mm::Sv39>(), 
-        1024 - 32, 
-        mm::Sv39Flags::R | mm::Sv39Flags::W | mm::Sv39Flags::X | mm::Sv39Flags::U
-    ).expect("allocate remaining space");
+    // addr_space.allocate_map(
+    //     mm::VirtAddr(0x80420000).page_number::<mm::Sv39>(), 
+    //     mm::PhysAddr(0x80420000).page_number::<mm::Sv39>(), 
+    //     1024 - 32, 
+    //     mm::Sv39Flags::R | mm::Sv39Flags::W | mm::Sv39Flags::X | mm::Sv39Flags::U
+    // ).expect("allocate remaining space");
     let stack_addr = mm::VirtAddr(0x60000000 + stack_frame_n * 0x1000); // 栈底是高地址
     (addr_space, frames, stack_addr)
 }
