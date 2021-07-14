@@ -11,7 +11,7 @@ use core::{
 use crate::mm;
 
 pub fn init() {
-    let mut addr = 0 as usize; // todo
+    let mut addr = trampoline_trap_entry as usize; // todo
     if addr & 0x2 != 0 {
         addr += 0x2; // 必须对齐到4个字节
     }
@@ -214,6 +214,77 @@ unsafe extern "C" fn trampoline_resume(_ctx: *mut ResumeContext, _user_satp: usi
         "ld     sp, 1*8(sp)", // 加载用户栈
         // sp = 用户栈, sscratch = 生成器上下文
         "sret", // set priv, j sepc
+        options(noreturn)
+    )
+}
+
+#[naked]
+#[link_section = ".trampoline"]
+unsafe extern "C" fn trampoline_trap_entry() {
+    asm!(
+        // sp = 用户栈, sscratch = 生成器上下文
+        "csrrw  sp, sscratch, sp", 
+        // sp = 生成器上下文, sscratch = 用户栈
+        "sd     ra, 0*8(sp)
+        sd      gp, 2*8(sp)
+        sd      tp, 3*8(sp)
+        sd      t0, 4*8(sp)
+        sd      t1, 5*8(sp)
+        sd      t2, 6*8(sp)
+        sd      s0, 7*8(sp)
+        sd      s1, 8*8(sp)
+        sd      a0, 9*8(sp)
+        sd      a1, 10*8(sp)
+        sd      a2, 11*8(sp)
+        sd      a3, 12*8(sp)
+        sd      a4, 13*8(sp)
+        sd      a5, 14*8(sp)
+        sd      a6, 15*8(sp)
+        sd      a7, 16*8(sp)
+        sd      s2, 17*8(sp)
+        sd      s3, 18*8(sp)
+        sd      s4, 19*8(sp)
+        sd      s5, 20*8(sp)
+        sd      s6, 21*8(sp)
+        sd      s7, 22*8(sp)
+        sd      s8, 23*8(sp)
+        sd      s9, 24*8(sp)
+        sd     s10, 25*8(sp)
+        sd     s11, 26*8(sp)
+        sd      t3, 27*8(sp)
+        sd      t4, 28*8(sp)
+        sd      t5, 29*8(sp)
+        sd      t6, 30*8(sp)",
+        "csrr   t0, sstatus
+        sd      t0, 31*8(sp)",
+        "csrr   t1, sepc
+        sd      t1, 32*8(sp)",
+        // sp = 生成器上下文, sscratch = 用户栈
+        "csrrw  t2, sscratch, sp", 
+        // sp = 生成器上下文, sscratch = 生成器上下文, t2 = 用户栈
+        "sd     t2, 1*8(sp)", // 保存用户栈
+        "ld     t3, 34*8(sp)", // t3 = 内核的地址空间配置
+        "csrw   satp, t3", // 写内核的地址空间配置；用户的地址空间配置将丢弃
+        "sfence.vma", // 立即切换地址空间
+        "ld     sp, 33*8(sp)", 
+        // sp = 内核栈
+        "ld     ra, 0*8(sp)
+        ld      gp, 1*8(sp)
+        ld      tp, 2*8(sp)
+        ld      s0, 3*8(sp)
+        ld      s1, 4*8(sp)
+        ld      s2, 5*8(sp)
+        ld      s3, 6*8(sp)
+        ld      s4, 7*8(sp)
+        ld      s5, 8*8(sp)
+        ld      s6, 9*8(sp)
+        ld      s7, 10*8(sp)
+        ld      s8, 11*8(sp)
+        ld      s9, 12*8(sp)
+        ld      s10, 13*8(sp)
+        ld      s11, 14*8(sp)
+        addi    sp, sp, 15*8", // sp = 内核栈
+        "jr     ra", // ret指令
         options(noreturn)
     )
 }
