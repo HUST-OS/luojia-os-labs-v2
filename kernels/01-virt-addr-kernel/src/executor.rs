@@ -19,17 +19,16 @@ pub fn init() {
 }
 
 #[repr(C)]
-pub struct Runtime {
-    context: ResumeContext, 
+pub struct Runtime { 
     user_satp: Satp,
     trampoline_resume: fn(*mut ResumeContext, Satp),
     current_user_stack: mm::VirtAddr,
+    context_addr: mm::VirtAddr,
 }
 
 impl Runtime {
-    pub fn new_user(new_sepc: usize, user_stack_addr: mm::VirtAddr, new_satp: Satp, trampoline_va_start: mm::VirtAddr) -> Self {
+    pub fn new_user(new_sepc: usize, user_stack_addr: mm::VirtAddr, new_satp: Satp, trampoline_va_start: mm::VirtAddr, context_addr: mm::VirtAddr) -> Self {
         let mut ans: Runtime = Runtime {
-            context: unsafe { core::mem::MaybeUninit::zeroed().assume_init() },
             user_satp: unsafe { core::mem::MaybeUninit::zeroed().assume_init() },
             current_user_stack: user_stack_addr,
             trampoline_resume: {
@@ -39,27 +38,28 @@ impl Runtime {
                 let resume_fn_va = resume_fn_pa - trampoline_pa_start + trampoline_va_start.0;
                 // println!("pa start = {:x?}, pa = {:x?}, va = {:x?}",trampoline_pa_start, resume_fn_pa, resume_fn_va);
                 unsafe { core::mem::transmute(resume_fn_va) }
-            }
+            },
+            context_addr,
         };
-        ans.prepare_next_app(new_sepc, new_satp);
+        unsafe { ans.prepare_next_app(new_sepc, new_satp) };
         ans
     }
 
-    fn reset(&mut self) {
-        self.context.sp = self.current_user_stack.0;
-        unsafe { sstatus::set_spp(SPP::User) };
-        self.context.sstatus = sstatus::read();
-        self.context.kernel_stack = 0x233333666666; // 将会被resume函数覆盖
+    unsafe fn reset(&mut self) {
+        self.context_mut().sp = self.current_user_stack.0;
+        sstatus::set_spp(SPP::User);
+        self.context_mut().sstatus = sstatus::read();
+        self.context_mut().kernel_stack = 0x233333666666; // 将会被resume函数覆盖
     }
 
     // 在处理异常的时候，使用context_mut得到运行时当前用户的上下文，可以改变上下文的内容
-    pub fn context_mut(&mut self) -> &mut ResumeContext {
-        &mut self.context
+    pub unsafe fn context_mut(&mut self) -> &mut ResumeContext {
+        &mut *(self.context_addr.0 as *mut ResumeContext)
     }
 
-    pub fn prepare_next_app(&mut self, new_sepc: usize, new_satp: Satp) {
+    pub unsafe fn prepare_next_app(&mut self, new_sepc: usize, new_satp: Satp) {
         self.reset();
-        self.context.sepc = new_sepc;
+        self.context_mut().sepc = new_sepc;
         self.user_satp = new_satp;
     }
 }
@@ -69,7 +69,7 @@ impl Generator for Runtime {
     type Return = ();
     fn resume(mut self: Pin<&mut Self>, _arg: ()) -> GeneratorState<Self::Yield, Self::Return> {
         (self.trampoline_resume)(
-            &mut self.context as *mut _,
+            unsafe { self.context_mut() } as *mut _,
             self.user_satp
         );
         let stval = stval::read();
@@ -78,7 +78,7 @@ impl Generator for Runtime {
             Trap::Exception(Exception::LoadFault) => KernelTrap::LoadAccessFault(stval),
             Trap::Exception(Exception::StoreFault) => KernelTrap::StoreAccessFault(stval),
             Trap::Exception(Exception::IllegalInstruction) => KernelTrap::IllegalInstruction(stval),
-            e => panic!("unhandled exception: {:?}! stval: {:#x?}, ctx: {:#x?}", e, stval, self.context)
+            e => panic!("unhandled exception: {:?}! stval: {:#x?}, ctx: {:#x?}", e, stval, unsafe { self.context_mut() })
         };
         GeneratorState::Yielded(trap)
     }
@@ -93,6 +93,7 @@ pub enum KernelTrap {
     IllegalInstruction(usize),
 }
 
+// 应当放到跳板数据页上，用户和内核
 #[derive(Debug)]
 #[repr(C)]
 pub struct ResumeContext {

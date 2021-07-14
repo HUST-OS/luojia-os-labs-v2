@@ -40,12 +40,29 @@ pub extern "C" fn rust_main(hartid: usize, dtb_pa: usize) -> ! {
         1024 - 32, 
         mm::Sv39Flags::R | mm::Sv39Flags::W | mm::Sv39Flags::X
     ).expect("allocate remaining space");
-    let (vpn, ppn, n) = get_trampoline_paging_config::<mm::Sv39>();
+    let (vpn, ppn, n) = get_trampoline_text_paging_config::<mm::Sv39>();
     let trampoline_va_start = vpn.addr_begin::<mm::Sv39>();
     kernel_addr_space.allocate_map(
         vpn, ppn, n,
         mm::Sv39Flags::R | mm::Sv39Flags::W | mm::Sv39Flags::X
     ).expect("allocate trampoline code mapped space");
+    // 跳板数据页
+    let data_len = core::mem::size_of::<executor::ResumeContext>();
+    let frame_size = 1_usize << <mm::Sv39 as mm::PageMode>::FRAME_SIZE_BITS;
+    assert!(data_len > 0, "resume context should take place in memory");
+    let data_frame_count = (data_len - 1) / frame_size + 1; // roundup(data_len / frame_size)
+    let mut frames = Vec::new();
+    for i in 0..data_frame_count {
+        let frame_box = mm::FrameBox::try_new_in(&frame_alloc).expect("allocate user stack frame");
+        kernel_addr_space.allocate_map(
+            // 去掉代码页的数量n
+            mm::VirtAddr(usize::MAX - n * 0x1000 - data_frame_count * 0x1000 + i * 0x1000 + 1).page_number::<mm::Sv39>(), 
+            frame_box.phys_page_num(), 
+            1,
+            mm::Sv39Flags::R | mm::Sv39Flags::W
+        ).expect("allocate trampoline data mapped space");
+        frames.push(frame_box)
+    }
     mm::test_asid_alloc();
     let max_asid = mm::max_asid();
     let mut asid_alloc = mm::StackAsidAllocator::new(max_asid);
@@ -55,14 +72,17 @@ pub extern "C" fn rust_main(hartid: usize, dtb_pa: usize) -> ! {
     };
     // println!("kernel satp = {:x?}", kernel_satp);
     executor::init();
-    let (user_space, _user_stack, user_stack_addr) = 
+    let (user_space, _user_stack, user_stack_addr, user_trampoline_data_addr) = 
         create_sv39_app_address_space(&frame_alloc);
     let user_asid = asid_alloc.allocate_asid().expect("alloc user asid");
+    println!("User space = {:x?}", user_space);
+    println!("Ppn = {:x?}", user_space.root_page_number());
     let mut rt = executor::Runtime::new_user(
         0x80400000, 
         user_stack_addr,
         mm::get_satp_sv39(user_asid, user_space.root_page_number()),
-        trampoline_va_start
+        trampoline_va_start,
+        user_trampoline_data_addr,
     ); 
     use core::pin::Pin;
     use core::ops::Generator;
@@ -74,7 +94,7 @@ pub extern "C" fn rust_main(hartid: usize, dtb_pa: usize) -> ! {
     // sbi::shutdown()
 }
 
-fn get_trampoline_paging_config<M: mm::PageMode>() -> (mm::VirtPageNum, mm::PhysPageNum, usize) {
+fn get_trampoline_text_paging_config<M: mm::PageMode>() -> (mm::VirtPageNum, mm::PhysPageNum, usize) {
     let (trampoline_pa_start, trampoline_pa_end) = {
         extern "C" { fn strampoline(); fn etrampoline(); }
         (strampoline as usize, etrampoline as usize)
@@ -91,37 +111,61 @@ fn get_trampoline_paging_config<M: mm::PageMode>() -> (mm::VirtPageNum, mm::Phys
     (vpn, ppn, n)
 }
 
-fn create_sv39_app_address_space<A: mm::FrameAllocator + Clone>(frame_alloc: A) -> (mm::PagedAddrSpace<mm::Sv39, A>, Vec<mm::FrameBox<A>>, mm::VirtAddr) {
+fn create_sv39_app_address_space<A: mm::FrameAllocator + Clone>(frame_alloc: A) -> (mm::PagedAddrSpace<mm::Sv39, A>, Vec<mm::FrameBox<A>>, mm::VirtAddr, mm::VirtAddr) {
     let mut addr_space = mm::PagedAddrSpace::try_new_in(mm::Sv39, frame_alloc.clone())
         .expect("allocate page to create kernel paged address space");
-    let (vpn, ppn, n) = get_trampoline_paging_config::<mm::Sv39>();
+    let (vpn, ppn, n) = get_trampoline_text_paging_config::<mm::Sv39>();
+    // 跳板代码页
     addr_space.allocate_map(
         vpn, ppn, n,
-        mm::Sv39Flags::R | mm::Sv39Flags::W | mm::Sv39Flags::X | mm::Sv39Flags::U
+        mm::Sv39Flags::R | mm::Sv39Flags::X // 不开U特权，因为这里从sret弹出后，才真正到用户层
     ).expect("allocate trampoline code mapped space");
+    // 用户程序空间
     addr_space.allocate_map(
         mm::VirtAddr(0x80400000).page_number::<mm::Sv39>(), 
         mm::PhysAddr(0x80400000).page_number::<mm::Sv39>(), 
         32,
         mm::Sv39Flags::R | mm::Sv39Flags::W | mm::Sv39Flags::X | mm::Sv39Flags::U
-    ).expect("allocate user mapped space");
-    let user_stack = {
-        let mut ans = Vec::new();
-        for i in 0..5 {
-            let frame_box = mm::FrameBox::try_new_in(frame_alloc.clone()).expect("allocate user stack frame");
-            addr_space.allocate_map(
-                mm::VirtAddr(0x60000000 + i * 0x1000).page_number::<mm::Sv39>(), 
-                frame_box.phys_page_num(), 
-                1,
-                mm::Sv39Flags::R | mm::Sv39Flags::W | mm::Sv39Flags::X | mm::Sv39Flags::U
-            ).expect("allocate user mapped space");
-            ans.push(frame_box)
-        }
-        ans
-    };
-    (addr_space, user_stack, mm::VirtAddr(0x60000000))
+    ).expect("allocate user program mapped space");
+    // 用户栈
+    let mut frames = Vec::new();
+    for i in 0..5 {
+        let frame_box = mm::FrameBox::try_new_in(frame_alloc.clone()).expect("allocate user stack frame");
+        addr_space.allocate_map(
+            mm::VirtAddr(0x60000000 + i * 0x1000).page_number::<mm::Sv39>(), 
+            frame_box.phys_page_num(), 
+            1,
+            mm::Sv39Flags::R | mm::Sv39Flags::W | mm::Sv39Flags::X | mm::Sv39Flags::U
+        ).expect("allocate user stack mapped space");
+        frames.push(frame_box)
+    }
+    // 跳板数据页
+    let data_len = core::mem::size_of::<executor::ResumeContext>();
+    let frame_size = 1_usize << <mm::Sv39 as mm::PageMode>::FRAME_SIZE_BITS;
+    assert!(data_len > 0, "resume context should take place in memory");
+    let data_frame_count = (data_len - 1) / frame_size + 1; // roundup(data_len / frame_size)
+    for i in 0..data_frame_count {
+        let frame_box = mm::FrameBox::try_new_in(frame_alloc.clone()).expect("allocate user stack frame");
+        addr_space.allocate_map(
+            // 去掉代码页的数量n
+            mm::VirtAddr(usize::MAX - n * 0x1000 - data_frame_count * 0x1000 + i * 0x1000 + 1).page_number::<mm::Sv39>(), 
+            frame_box.phys_page_num(), 
+            1,
+            mm::Sv39Flags::R | mm::Sv39Flags::W
+        ).expect("allocate trampoline data mapped space");
+        frames.push(frame_box)
+    }
+    /* 调试用 */
+    addr_space.allocate_map(
+        mm::VirtAddr(0x80420000).page_number::<mm::Sv39>(), 
+        mm::PhysAddr(0x80420000).page_number::<mm::Sv39>(), 
+        1024 - 32, 
+        mm::Sv39Flags::R | mm::Sv39Flags::W | mm::Sv39Flags::X | mm::Sv39Flags::U
+    ).expect("allocate remaining space");
+    let stack_addr = mm::VirtAddr(0x60000000);
+    let trampoline_data_addr = mm::VirtAddr(usize::MAX - n * 0x1000 - data_frame_count * 0x1000 + 1);
+    (addr_space, frames, stack_addr, trampoline_data_addr)
 }
-
 
 #[cfg_attr(not(test), panic_handler)]
 #[allow(unused)]
