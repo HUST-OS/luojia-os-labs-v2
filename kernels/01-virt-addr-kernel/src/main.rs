@@ -33,17 +33,23 @@ pub extern "C" fn rust_main(hartid: usize, dtb_pa: usize) -> ! {
         1024,
         mm::Sv39Flags::R | mm::Sv39Flags::W | mm::Sv39Flags::X
     ).expect("allocate one mapped space");
+    kernel_addr_space.allocate_map(
+        mm::VirtAddr(0x80420000).page_number::<mm::Sv39>(), 
+        mm::PhysAddr(0x80420000).page_number::<mm::Sv39>(), 
+        1024 - 32, 
+        mm::Sv39Flags::R | mm::Sv39Flags::W | mm::Sv39Flags::X
+    ).expect("allocate remaining space");
     let (vpn, ppn, n) = get_trampoline_paging_config::<mm::Sv39>();
     let trampoline_va_start = vpn.addr_begin::<mm::Sv39>();
     kernel_addr_space.allocate_map(
         vpn, ppn, n,
-        mm::Sv39Flags::R | mm::Sv39Flags::W | mm::Sv39Flags::X | mm::Sv39Flags::U
+        mm::Sv39Flags::R | mm::Sv39Flags::W | mm::Sv39Flags::X
     ).expect("allocate trampoline code mapped space");
     kernel_addr_space.allocate_map(
         mm::VirtAddr(0x80400000).page_number::<mm::Sv39>(), 
         mm::PhysAddr(0x80400000).page_number::<mm::Sv39>(), 
         32,
-        mm::Sv39Flags::R | mm::Sv39Flags::W | mm::Sv39Flags::X | mm::Sv39Flags::U
+        mm::Sv39Flags::R | mm::Sv39Flags::W | mm::Sv39Flags::X
     ).expect("allocate user mapped space");
     mm::test_asid_alloc();
     let max_asid = mm::max_asid();

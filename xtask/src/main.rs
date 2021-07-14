@@ -45,6 +45,13 @@ fn main() {
             (@arg release: --release "Build artifacts in release mode, with optimizations")
             (@arg app: "Choose the apps to be bundled")
         )
+        (@subcommand debug =>
+            (about: "Debug with QEMU and GDB stub")
+            (@arg app: "Choose the apps to be bundled")
+        )
+        (@subcommand gdb =>
+            (about: "Run GDB debugger")
+        )
     ).get_matches();
     let kernel_package_path = project_root().join("kernels").join(&default_kernel_path());
     let kernel_package_name = read_package_name(&kernel_package_path);
@@ -77,7 +84,21 @@ fn main() {
         }
         xtask_build_kernel(&xtask_env);
         xtask_binary_kernel(&xtask_env);
-        xtask_qemu(&xtask_env, chosen_app);
+        xtask_qemu_run(&xtask_env, chosen_app);
+    } else if let Some(matches) = matches.subcommand_matches("debug") {
+        let chosen_app = "hello-world"; // todo: 目前是写死的
+        if let Some(app_matches) = matches.values_of("app") {
+            for app_name in app_matches {
+                println!("xtask: building app {}", app_name);
+                xtask_build_app(&xtask_env, app_name);
+                xtask_binary_app(&xtask_env, app_name);
+            }
+        }
+        xtask_build_kernel(&xtask_env);
+        xtask_binary_kernel(&xtask_env);
+        xtask_qemu_debug(&xtask_env, chosen_app);
+    } else if let Some(_matches) = matches.subcommand_matches("gdb") {
+        xtask_gdb(&xtask_env);
     } else if let Some(_matches) = matches.subcommand_matches("asm") {
         xtask_build_kernel(&xtask_env);
         xtask_asm_kernel(&xtask_env);
@@ -187,7 +208,7 @@ build: firmware
     }
 }
 
-fn xtask_qemu(xtask_env: &XtaskEnv, one_app: &str) {
+fn xtask_qemu_run(xtask_env: &XtaskEnv, one_app: &str) {
     /*
     qemu: build
     @qemu-system-riscv64 \
@@ -207,6 +228,38 @@ fn xtask_qemu(xtask_env: &XtaskEnv, one_app: &str) {
         .args(&["-device", &format!("loader,file={}.bin,addr=0x80400000", one_app)])
         .status().unwrap();
     
+    if !status.success() {
+        println!("qemu failed");
+        process::exit(1);
+    }
+}
+
+fn xtask_qemu_debug(xtask_env: &XtaskEnv, one_app: &str) {
+    let status = Command::new("qemu-system-riscv64")
+        .current_dir(dist_dir(xtask_env))
+        .args(&["-machine", "virt"])
+        .args(&["-bios", "../../../bootloader/rustsbi-qemu.bin"])
+        .args(&["-kernel", &xtask_env.kernel_binary_name])
+        .arg("-nographic")
+        .args(&["-device", &format!("loader,file={}.bin,addr=0x80400000", one_app)])
+        .args(&["-gdb", "tcp::1234", "-S"])
+        .status().unwrap();
+    
+    if !status.success() {
+        println!("qemu failed");
+        process::exit(1);
+    }
+}
+
+fn xtask_gdb(xtask_env: &XtaskEnv) {
+    let status = Command::new("riscv64-unknown-elf-gdb")
+        .current_dir(dist_dir(xtask_env))
+        .args(&["--eval-command", &format!("file {}", &xtask_env.kernel_package_name)])
+        .args(&["--eval-command", "target remote localhost:1234"])
+        .arg("-q")
+        .status()
+        .unwrap();
+
     if !status.success() {
         println!("qemu failed");
         process::exit(1);
