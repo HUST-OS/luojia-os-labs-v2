@@ -37,6 +37,12 @@ pub extern "C" fn rust_main(hartid: usize, dtb_pa: usize) -> ! {
         mm::Sv39Flags::R | mm::Sv39Flags::W | mm::Sv39Flags::X
     ).expect("allocate one mapped space");
     kernel_addr_space.allocate_map(
+        mm::VirtAddr(0x80400000).page_number::<mm::Sv39>(), 
+        mm::PhysAddr(0x80400000).page_number::<mm::Sv39>(), 
+        32,
+        mm::Sv39Flags::R | mm::Sv39Flags::W | mm::Sv39Flags::X
+    ).expect("allocate user program mapped space");
+    kernel_addr_space.allocate_map(
         mm::VirtAddr(0x80420000).page_number::<mm::Sv39>(), 
         mm::PhysAddr(0x80420000).page_number::<mm::Sv39>(), 
         1024 - 32, 
@@ -100,9 +106,9 @@ pub extern "C" fn rust_main(hartid: usize, dtb_pa: usize) -> ! {
     loop {
         match Pin::new(&mut rt).resume(()) {
             GeneratorState::Yielded(executor::KernelTrap::Syscall()) => {
-                println!("Kernel trap syscall!");
+                // println!("Kernel trap syscall!");
                 let ctx = unsafe { rt.context_mut() };
-                match syscall(ctx.a7, ctx.a6, [ctx.a0, ctx.a1, ctx.a2, ctx.a3, ctx.a4, ctx.a5]) {
+                match syscall(ctx.a7, ctx.a6, [ctx.a0, ctx.a1, ctx.a2, ctx.a3, ctx.a4, ctx.a5], &user_space) {
                     SyscallOperation::Return(ans) => {
                         ctx.a0 = ans.code;
                         ctx.a1 = ans.extra;

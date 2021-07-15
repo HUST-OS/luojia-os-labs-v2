@@ -50,9 +50,10 @@ impl VirtAddr {
     pub fn page_number<M: PageMode>(&self) -> VirtPageNum { 
         VirtPageNum(self.0 >> M::FRAME_SIZE_BITS)
     }
-//     pub fn page_offset(&self) -> usize { 
-//         self.0 & (PAGE_SIZE - 1)
-    // }
+    pub fn page_offset<M: PageMode>(&self, lvl: PageLevel) -> usize { 
+        // println!("{:?}, {:?}, {}", lvl, M::get_layout_for_level(lvl), M::get_layout_for_level(lvl).page_size::<M>());
+        self.0 & (M::get_layout_for_level(lvl).page_size::<M>() - 1)
+    }
 }
 
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
@@ -81,6 +82,10 @@ pub struct VirtPageNum(usize);
 impl VirtPageNum {
     pub fn addr_begin<M: PageMode>(&self) -> VirtAddr {
         VirtAddr(self.0 << M::FRAME_SIZE_BITS)
+    }
+    pub fn next_page<M: PageMode>(&self, lvl: PageLevel) -> VirtPageNum {
+        let step = M::get_layout_for_level(lvl).frame_align();
+        VirtPageNum(self.0.wrapping_add(step))
     }
 }
 
@@ -139,6 +144,9 @@ impl FrameLayout {
     }
     pub const fn frame_align(&self) -> usize {
         self.frame_align
+    }
+    pub fn page_size<M: PageMode>(&self) -> usize {
+        self.frame_align << M::FRAME_SIZE_BITS
     }
 }
 
@@ -374,10 +382,12 @@ pub trait PageMode: Copy {
     fn slot_set_child(slot: &mut Self::Slot, ppn: PhysPageNum);
     // 写数据，建立一个到内存地址的页表项
     fn slot_set_mapping(slot: &mut Self::Slot, ppn: PhysPageNum, flags: Self::Flags);
+    // 判断页表项目是否是一个叶子节点
+    fn entry_is_leaf_page(entry: &mut Self::Entry) -> bool;
     // 写数据到页表项目，说明这是一个叶子节点
     fn entry_write_ppn_flags(entry: &mut Self::Entry, ppn: PhysPageNum, flags: Self::Flags);
     // 得到一个页表项目包含的物理页号
-    fn entry_get_ppn(entry: &mut Self::Entry) -> PhysPageNum;
+    fn entry_get_ppn(entry: &Self::Entry) -> PhysPageNum;
 }
 
 // 我们认为今天的分页系统都是分为不同的等级，就是多级页表，这里表示页表的等级是多少
@@ -477,10 +487,14 @@ impl PageMode for Sv39 {
         let ans = unsafe { &mut *(slot as *mut _ as *mut Sv39PageEntry) };
         ans.write_ppn_flags(ppn, Sv39Flags::V | flags);
     }
+    fn entry_is_leaf_page(entry: &mut Sv39PageEntry) -> bool {
+        // 如果包含R、W或X项，就是叶子节点。
+        entry.flags().intersects(Sv39Flags::R | Sv39Flags::W | Sv39Flags::X)
+    }
     fn entry_write_ppn_flags(entry: &mut Sv39PageEntry, ppn: PhysPageNum, flags: Sv39Flags) {
         entry.write_ppn_flags(ppn, flags);
     }
-    fn entry_get_ppn(entry: &mut Sv39PageEntry) -> PhysPageNum {
+    fn entry_get_ppn(entry: &Sv39PageEntry) -> PhysPageNum {
         entry.ppn()
     }
 }
@@ -624,6 +638,34 @@ impl<M: PageMode, A: FrameAllocator + Clone> PagedAddrSpace<M, A> {
     // pub fn unmap(&mut self, vpn: VirtPageNum) {
     //     todo!()
     // }
+
+    /// 根据虚拟页号查询物理页号，可能出错。
+    pub fn find_ppn(&self, vpn: VirtPageNum) -> Result<(&M::Entry, PageLevel), PageError> {
+        let mut ppn = self.root_frame.phys_page_num();
+        for &lvl in M::visit_levels_until(PageLevel::leaf_level()) {
+            // 注意: 要求内核对页表空间有恒等映射，可以直接解释物理地址
+            let page_table = unsafe { unref_ppn_mut::<M>(ppn) };
+            let vidx = M::vpn_index(vpn, lvl);
+            match M::slot_try_get_entry(&mut page_table[vidx]) {
+                Ok(entry) => if M::entry_is_leaf_page(entry) {
+                    return Ok((entry, lvl))
+                } else {
+                    ppn = M::entry_get_ppn(entry)
+                },
+                Err(_slot) => return Err(PageError::InvalidEntry)
+            }
+        }
+        Err(PageError::NotLeafInLowerestPage)
+    }
+}
+
+/// 查询物理页号可能出现的错误
+#[derive(Debug)]
+pub enum PageError {
+    /// 节点不具有有效位
+    InvalidEntry,
+    /// 第0层页表不能是内部节点
+    NotLeafInLowerestPage
 }
 
 #[derive(Debug)]
@@ -704,4 +746,46 @@ pub unsafe fn activate_paged_riscv_sv39(root_ppn: PhysPageNum, asid: AddressSpac
 pub fn get_satp_sv39(asid: AddressSpaceId, ppn: PhysPageNum) -> Satp {
     let bits = (8 << 60) | ((asid.0 as usize) << 44) | ppn.0;
     unsafe { core::mem::transmute(bits) }
+}
+
+// 帧翻译：在空间1中访问空间2的帧。要求空间1具有恒等映射特性
+pub fn translate_frame_read</*M1, A1, */M2, A2, F>(
+    // as1: &PagedAddrSpace<M1, A1>, 
+    as2: &PagedAddrSpace<M2, A2>, 
+    vaddr2: VirtAddr, 
+    len_bytes2: usize, 
+    f: F
+) -> Result<(), PageError>
+where 
+    // M1: PageMode, 
+    // A1: FrameAllocator + Clone,
+    M2: PageMode, 
+    A2: FrameAllocator + Clone,
+    F: Fn(PhysPageNum, usize, usize) // 按顺序返回空间1中的帧
+{
+    // println!("vaddr2 = {:x?}, len_bytes2 = {}", vaddr2, len_bytes2);
+    let mut vpn2 = vaddr2.page_number::<M2>();
+    let mut remaining_len = len_bytes2;
+    let (mut entry, mut lvl) = as2.find_ppn(vpn2)?;
+    let mut cur_offset = vaddr2.page_offset::<M2>(lvl);
+    while remaining_len > 0 {
+        let ppn = M2::entry_get_ppn(entry);
+        let cur_frame_layout = M2::get_layout_for_level(lvl);
+        let cur_len = if remaining_len <= cur_frame_layout.page_size::<M2>() {
+            remaining_len
+        } else {
+            cur_frame_layout.page_size::<M2>()
+        };
+        f(ppn, cur_offset, cur_len);
+        // println!("[] {} {} {}", cur_frame_layout.page_size::<M2>(), cur_offset, cur_len);
+        remaining_len -= cur_len;
+        if remaining_len == 0 {
+            return Ok(())
+        }
+        cur_offset = 0; // 下一个帧从头开始
+        vpn2 = vpn2.next_page::<M2>(lvl);
+        (entry, lvl) = as2.find_ppn(vpn2)?;
+        // println!("[] {}", remaining_len);
+    }
+    Ok(())
 }
