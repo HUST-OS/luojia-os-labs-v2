@@ -58,13 +58,13 @@ where M: mm::PageMode, A: mm::FrameAllocator + Clone {
             let [fd, buf, len] = args;
             if fd == STDOUT {
                 let buf_vaddr = mm::VirtAddr(buf);
+                // println!("vaddr = {:x?}", buf_vaddr);
                 mm::translate_frame_read(user_as, buf_vaddr, len, |ppn, cur_offset, cur_len| {
                     let buf_frame_kernel_vaddr = ppn.addr_begin::<M>().0 + cur_offset; // 只有恒等映射的内核有效
                     let slice = unsafe { core::slice::from_raw_parts(buf_frame_kernel_vaddr as *const u8, cur_len) };
                     for &byte in slice {
                         crate::sbi::console_putchar(byte as usize);
                     }
-                    // println!("vaddr = {:x?}", buf_frame_kernel_vaddr);
                     // println!("ppn = {:x?}, off = {:x}, len = {}, slice = {:x?}", ppn, cur_offset, cur_len, slice as *const _);
                 }).expect("read user buffer");
                 SyscallOperation::Return(SyscallResult { code: 0, extra: len as usize })
