@@ -95,7 +95,7 @@ pub extern "C" fn rust_main(hartid: usize, dtb_pa: usize) -> ! {
     // println!("User space = {:x?}", user_space);
     // println!("Ppn = {:x?}", user_space.root_page_number());
     let mut rt = executor::Runtime::new_user(
-        0x80400000, 
+        0x1000, 
         user_stack_addr,
         mm::get_satp_sv39(user_asid, user_space.root_page_number()),
         trampoline_va_start,
@@ -167,7 +167,7 @@ fn create_sv39_app_address_space<A: mm::FrameAllocator + Clone>(frame_alloc: A) 
     ).expect("allocate trampoline code mapped space");
     // 用户程序空间
     addr_space.allocate_map(
-        mm::VirtAddr(0x80400000).page_number::<mm::Sv39>(), 
+        mm::VirtAddr(0x1000).page_number::<mm::Sv39>(), 
         mm::PhysAddr(0x80400000).page_number::<mm::Sv39>(), 
         32,
         mm::Sv39Flags::R | mm::Sv39Flags::W | mm::Sv39Flags::X | mm::Sv39Flags::U
