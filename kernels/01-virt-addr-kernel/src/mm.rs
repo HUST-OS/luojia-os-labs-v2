@@ -83,7 +83,7 @@ impl VirtPageNum {
     pub fn addr_begin<M: PageMode>(&self) -> VirtAddr {
         VirtAddr(self.0 << M::FRAME_SIZE_BITS)
     }
-    pub fn next_page<M: PageMode>(&self, lvl: PageLevel) -> VirtPageNum {
+    pub fn next_page_by_level<M: PageMode>(&self, lvl: PageLevel) -> VirtPageNum {
         let step = M::get_layout_for_level(lvl).frame_align();
         VirtPageNum(self.0.wrapping_add(step))
     }
@@ -783,7 +783,7 @@ where
             return Ok(())
         }
         cur_offset = 0; // 下一个帧从头开始
-        vpn2 = vpn2.next_page::<M2>(lvl);
+        vpn2 = vpn2.next_page_by_level::<M2>(lvl);
         (entry, lvl) = as2.find_ppn(vpn2)?;
         // println!("[] {}", remaining_len);
     }
